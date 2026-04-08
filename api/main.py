@@ -34,6 +34,17 @@ with open(os.path.join(os.path.dirname(__file__), "questions.json"), "r") as f:
 MAX_QUIZ_ATTEMPTS = 10
 QUIZ_QUESTION_COUNT = 2
 
+def _issue_otp_for_email(email: str, db: Session) -> tuple[str, bool]:
+    code = "".join(random.choices(string.digits, k=6))
+    existing_otp = db.query(models.OTP).filter(models.OTP.email == email).first()
+    if existing_otp:
+        existing_otp.code = code
+    else:
+        db.add(models.OTP(email=email, code=code))
+    db.commit()
+    sent = send_otp_email(email, code)
+    return code, sent
+
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -65,16 +76,7 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
 
-    # Generate 6-digit OTP and store in otp table (overwrite previous for same email)
-    code = "".join(random.choices(string.digits, k=6))
-    existing_otp = db.query(models.OTP).filter(models.OTP.email == user.email).first()
-    if existing_otp:
-        existing_otp.code = code
-    else:
-        db.add(models.OTP(email=user.email, code=code))
-    db.commit()
-
-    sent = send_otp_email(user.email, code)
+    code, sent = _issue_otp_for_email(user.email, db)
     response = {
         "message": "User registered. Please verify OTP sent to your email.",
         "email_sent": sent,
@@ -85,6 +87,28 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
             "Check SMTP settings in .env or use otp_debug if enabled."
         )
     # Dev aid: include OTP in JSON only when SMTP missing or SMTP_DEBUG=true
+    if os.getenv("SMTP_DEBUG", "").lower() in ("1", "true", "yes") or not smtp_configured():
+        response["otp_debug"] = code
+    return response
+
+@app.post("/resend-otp", response_model=dict)
+def resend_otp(payload: schemas.OTPResend, db: Session = Depends(get_db)):
+    db_user = db.query(models.User).filter(models.User.email == payload.email).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if db_user.is_verified:
+        raise HTTPException(status_code=400, detail="Email is already verified")
+
+    code, sent = _issue_otp_for_email(payload.email, db)
+    response = {
+        "message": "A new verification code has been sent to your email.",
+        "email_sent": sent,
+    }
+    if not sent:
+        response["message"] = (
+            "Could not send verification email right now. "
+            "Check SMTP settings in .env or retry in a moment."
+        )
     if os.getenv("SMTP_DEBUG", "").lower() in ("1", "true", "yes") or not smtp_configured():
         response["otp_debug"] = code
     return response
@@ -221,8 +245,11 @@ def submit_quiz(submission: schemas.QuizSubmit, current_user: models.User = Depe
 
 @app.post("/submit-response")
 def submit_response(submission: schemas.CreativeSubmit, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    attempt = db.query(models.QuizAttempt).filter(models.QuizAttempt.user_id == current_user.id).first()
-    if not attempt or not attempt.passed:
+    has_passed_attempt = db.query(models.QuizAttempt).filter(
+        models.QuizAttempt.user_id == current_user.id,
+        models.QuizAttempt.passed == True
+    ).first()
+    if not has_passed_attempt:
         raise HTTPException(status_code=403, detail="Must pass quiz first")
     
     existing = db.query(models.Response).filter(models.Response.user_id == current_user.id).first()
@@ -234,6 +261,7 @@ def submit_response(submission: schemas.CreativeSubmit, current_user: models.Use
         raise HTTPException(status_code=400, detail=f"Response must be exactly 25 words. Current count: {len(words)}")
         
     scores = ai_scorer.evaluate_creative_response(submission.response)
+    audit_events = scores.pop("audit_events", [])
     
     new_response = models.Response(
         user_id=current_user.id,
@@ -245,6 +273,20 @@ def submit_response(submission: schemas.CreativeSubmit, current_user: models.Use
         total_score=scores.get('total_score', 0)
     )
     db.add(new_response)
+    db.commit()
+
+    for event in audit_events:
+        db.add(
+            models.EvaluationAudit(
+                user_id=current_user.id,
+                response_content=submission.response,
+                stage=event.get("stage", "unknown"),
+                agent=event.get("agent", "unknown"),
+                tool_name=event.get("tool_name"),
+                input_payload=json.dumps(event.get("input_payload", {})),
+                output_payload=json.dumps(event.get("output_payload", {})),
+            )
+        )
     db.commit()
     return {"message": "Response scored", "scores": scores}
 
@@ -271,4 +313,50 @@ def get_my_quiz_attempts(current_user: models.User = Depends(get_current_user), 
         "attempts_used": attempts_used,
         "max_attempts": MAX_QUIZ_ATTEMPTS,
         "attempts_remaining": max(MAX_QUIZ_ATTEMPTS - attempts_used, 0)
+    }
+
+
+@app.get("/adjudication/shortlist")
+def get_adjudication_shortlist(limit: int = 10, db: Session = Depends(get_db)):
+    responses = db.query(models.Response).order_by(models.Response.total_score.desc()).all()
+    entries = [
+        {
+            "user_id": r.user_id,
+            "content": r.content,
+            "scores": {
+                "relevance": r.relevance,
+                "creativity": r.creativity,
+                "clarity": r.clarity,
+                "impact": r.impact,
+                "total_score": r.total_score,
+            },
+        }
+        for r in responses
+    ]
+    shortlist = ai_scorer.generate_shortlist(entries, top_k=limit)
+    return shortlist
+
+
+@app.get("/adjudication/audit/{user_id}")
+def get_adjudication_audit(user_id: int, db: Session = Depends(get_db)):
+    logs = (
+        db.query(models.EvaluationAudit)
+        .filter(models.EvaluationAudit.user_id == user_id)
+        .order_by(models.EvaluationAudit.created_at.desc())
+        .all()
+    )
+    return {
+        "user_id": user_id,
+        "count": len(logs),
+        "events": [
+            {
+                "stage": log.stage,
+                "agent": log.agent,
+                "tool_name": log.tool_name,
+                "input_payload": log.input_payload,
+                "output_payload": log.output_payload,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log in logs
+        ],
     }

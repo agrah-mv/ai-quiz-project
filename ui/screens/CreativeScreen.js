@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -8,6 +8,7 @@ const API_BASE = 'http://localhost:8000';
 export default function CreativeScreen({ navigation }) {
   const [response, setResponse] = useState('');
   const [timeLeft, setTimeLeft] = useState(120);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (timeLeft === 0) {
@@ -26,8 +27,10 @@ export default function CreativeScreen({ navigation }) {
       Alert.alert("Rule Violation", "Response must be exactly 25 words.");
       return;
     }
+    if (isSubmitting) return;
     
     try {
+      setIsSubmitting(true);
       const token = await AsyncStorage.getItem('userToken');
       const res = await axios.post(`${API_BASE}/submit-response`, { response }, {
         headers: { Authorization: `Bearer ${token}` }
@@ -36,7 +39,10 @@ export default function CreativeScreen({ navigation }) {
       navigation.navigate('EntryAccepted');
     } catch (e) {
       console.log("Creative Submit Error:", e);
-      navigation.navigate('EntryAccepted'); // Fallback dev flow
+      const detail = e.response?.data?.detail || "Submission failed. Please try again.";
+      Alert.alert("Submission failed", detail);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -63,11 +69,18 @@ export default function CreativeScreen({ navigation }) {
       </Text>
 
       <TouchableOpacity 
-        style={[styles.button, wordCount !== 25 && styles.buttonDisabled]} 
+        style={[styles.button, (wordCount !== 25 || isSubmitting) && styles.buttonDisabled]} 
         onPress={handleSubmit}
-        disabled={wordCount !== 25}
+        disabled={wordCount !== 25 || isSubmitting}
       >
-        <Text style={styles.buttonText}>SUBMIT ENTRY</Text>
+        {isSubmitting ? (
+          <View style={styles.buttonInner}>
+            <ActivityIndicator size="small" color="#FFF" style={styles.spinner} />
+            <Text style={styles.buttonText}>SCORING...</Text>
+          </View>
+        ) : (
+          <Text style={styles.buttonText}>SUBMIT ENTRY</Text>
+        )}
       </TouchableOpacity>
     </View>
   );
@@ -131,5 +144,13 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: 'bold',
     fontSize: 16,
-  }
+  },
+  buttonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  spinner: {
+    marginRight: 8,
+  },
 });

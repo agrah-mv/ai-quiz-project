@@ -9,6 +9,7 @@ export default function EmailVerifyScreen({ route, navigation }) {
   const { email } = route.params || {};
   const [digits, setDigits] = useState(['', '', '', '', '', '']);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [isResending, setIsResending] = useState(false);
   const inputsRef = useRef([]);
 
   const handleChange = (index, value) => {
@@ -56,14 +57,17 @@ export default function EmailVerifyScreen({ route, navigation }) {
   };
 
   const handleResend = async () => {
-    if (!email) return;
+    if (!email || isResending) return;
+    setIsResending(true);
     try {
-      // In real app, call a dedicated /resend-otp; for now we can reuse signup to regenerate OTP
-      await axios.post(`${API_BASE}/signup`, { email, password: 'TempPass123!' });
-      Alert.alert('Code resent', 'A new verification code has been sent to your email.');
+      const res = await axios.post(`${API_BASE}/resend-otp`, { email });
+      Alert.alert('Code resent', res.data?.message || 'A new verification code has been sent to your email.');
     } catch (err) {
       console.log('Resend OTP Error:', err);
-      Alert.alert('Cannot resend', 'Please try again later.');
+      const detail = err.response?.data?.detail || 'Please try again later.';
+      Alert.alert('Cannot resend', detail);
+    } finally {
+      setIsResending(false);
     }
   };
 
@@ -102,8 +106,10 @@ export default function EmailVerifyScreen({ route, navigation }) {
 
       <View style={styles.resendContainer}>
         <Text style={styles.resendPrompt}>Did not receive the code?</Text>
-        <TouchableOpacity onPress={handleResend}>
-          <Text style={styles.resendText}>Resend Code</Text>
+        <TouchableOpacity onPress={handleResend} disabled={isResending}>
+          <Text style={[styles.resendText, isResending && styles.resendTextDisabled]}>
+            {isResending ? 'Resending...' : 'Resend Code'}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -211,6 +217,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 4,
     textDecorationLine: 'underline',
+  },
+  resendTextDisabled: {
+    opacity: 0.6,
+    textDecorationLine: 'none',
   },
   warnBox: {
     marginTop: 20,

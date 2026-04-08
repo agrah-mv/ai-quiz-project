@@ -40,7 +40,7 @@ export default function QuizIncorrectScreen({ navigation }) {
   };
 
   const handleAddAnotherEntry = () => {
-    navigation.navigate('Quiz');
+    navigation.navigate('Quiz', { restart: true });
   };
 
   return (

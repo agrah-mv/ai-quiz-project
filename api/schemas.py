@@ -9,6 +9,9 @@ class OTPVerify(BaseModel):
     email: EmailStr
     code: str
 
+class OTPResend(BaseModel):
+    email: EmailStr
+
 class UserLogin(BaseModel):
     email: EmailStr
     password: str

@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { useRoute, useIsFocused, useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE = 'http://localhost:8000';
 
 export default function QuizScreen({ navigation }) {
+  const route = useRoute();
+  const isFocused = useIsFocused();
   const [questions, setQuestions] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(30);
@@ -14,30 +17,46 @@ export default function QuizScreen({ navigation }) {
   const [maxAttempts, setMaxAttempts] = useState(10);
   const [timeoutHandled, setTimeoutHandled] = useState(false);
 
-  useEffect(() => {
-    const fetchQuiz = async () => {
-      try {
-        const token = await AsyncStorage.getItem('userToken');
-        const res = await axios.get(`${API_BASE}/quiz`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        setQuestions(res.data.questions || []);
-        setAttemptsRemaining(res.data.attempts_remaining ?? null);
-        setMaxAttempts(res.data.max_attempts ?? 10);
-      } catch (err) {
-        console.log("Quiz Fetch Error:", err);
-        const detail = err.response?.data?.detail || "Could not load quiz.";
-        Alert.alert("Quiz Unavailable", detail, [
-          { text: "OK", onPress: () => navigation.navigate('Landing') }
-        ]);
-      }
-    };
-    fetchQuiz();
-  }, []);
+  const fetchQuiz = useCallback(async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      const res = await axios.get(`${API_BASE}/quiz`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setQuestions(res.data.questions || []);
+      setAttemptsRemaining(res.data.attempts_remaining ?? null);
+      setMaxAttempts(res.data.max_attempts ?? 10);
+    } catch (err) {
+      console.log("Quiz Fetch Error:", err);
+      const detail = err.response?.data?.detail || "Could not load quiz.";
+      Alert.alert("Quiz Unavailable", detail, [
+        { text: "OK", onPress: () => navigation.navigate('Landing') }
+      ]);
+    }
+  }, [navigation]);
 
   useEffect(() => {
-    if (questions.length === 0) return;
-    
+    fetchQuiz();
+  }, [fetchQuiz]);
+
+  // "Add another entry" / retry: reset state and reload questions without double-counting
+  useFocusEffect(
+    useCallback(() => {
+      if (!route.params?.restart) return;
+      navigation.setParams({ restart: undefined });
+      setCurrentIndex(0);
+      setTimeLeft(30);
+      setAnswers({});
+      setTimeoutHandled(false);
+      setQuestions([]);
+      fetchQuiz();
+    }, [route.params?.restart, navigation, fetchQuiz])
+  );
+
+  useEffect(() => {
+    // While this screen is covered (e.g. QuizIncorrect), do not count down or POST /quiz-timeout.
+    if (!isFocused || questions.length === 0) return;
+
     if (timeLeft === 0) {
       const handleTimeout = async () => {
         if (timeoutHandled) return;
@@ -62,7 +81,7 @@ export default function QuizScreen({ navigation }) {
     }, 1000);
 
     return () => clearInterval(intervalId);
-  }, [timeLeft, questions]);
+  }, [timeLeft, questions, isFocused, navigation]);
 
   const handleAnswer = async (optionKey) => {
     const q = questions[currentIndex];

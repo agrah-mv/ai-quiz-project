@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Float, DateTime
+from datetime import datetime
 from database import Base
 
 class User(Base):
@@ -32,3 +33,15 @@ class Response(Base):
     clarity = Column(Float, default=0)
     impact = Column(Float, default=0)
     total_score = Column(Float, default=0)
+
+class EvaluationAudit(Base):
+    __tablename__ = "evaluation_audits"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    response_content = Column(String)
+    stage = Column(String, index=True)
+    agent = Column(String, index=True)
+    tool_name = Column(String, nullable=True)
+    input_payload = Column(String, nullable=True)
+    output_payload = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
