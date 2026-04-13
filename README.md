@@ -60,6 +60,7 @@ SMTP_DEBUG=false
 ## Core API Endpoints
 
 - `POST /signup` -> creates user, stores OTP, sends OTP email
+- `POST /resend-otp` -> regenerates and resends OTP for unverified users
 - `POST /verify-otp` -> verifies email and issues token
 - `POST /login` -> login for verified users; returns next screen info
 - `GET /quiz` -> quiz questions + attempts remaining
@@ -67,12 +68,31 @@ SMTP_DEBUG=false
 - `POST /quiz-timeout` -> records timeout as failed attempt
 - `POST /submit-quiz` -> records final quiz attempt
 - `GET /my-quiz-attempts` -> attempts used/remaining
-- `POST /submit-response` -> 25-word creative response scoring
+- `POST /submit-response` -> 25-word creative response scoring (supports resubmission and rescoring)
+- `GET /my-creative-result` -> current user creative result (submitted or not)
 - `GET /leaderboard` -> public top scores
+- `GET /adjudication/shortlist?limit=10` -> ranked shortlist from scored entries
+- `GET /adjudication/audit/{user_id}` -> evaluation audit events per user
 
-## Notes
+## AI Adjudication Pipeline
+
+- Multi-agent flow with two LLM roles:
+  - Agent A: initial rubric scoring
+  - Agent B: review/adjustment for consistency
+- Tool steps:
+  - `word_count_tool`
+  - `normalize_scores_tool`
+  - `aggregate_total_tool`
+  - `off_topic_guard_tool` (keeps unrelated responses from scoring high)
+- Audit trail is persisted in `evaluation_audits`.
+
+## UX Notes
 
 - Max quiz attempts per user: **10**
 - Timeout and wrong answers both consume an attempt
-- Dashboard updates attempts on screen focus
+- Quiz answer flow is explicit:
+  - select an option (highlighted)
+  - click **NEXT QUESTION** / **SUBMIT QUIZ**
+- Dashboard attempts and leaderboard refresh on focus
+- `VIEW AI RESULT` is user-scoped (fetched from backend), avoiding stale cross-user local cache
 - Session persists on refresh via `AsyncStorage` token
