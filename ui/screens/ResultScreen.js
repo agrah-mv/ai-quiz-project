@@ -1,38 +1,82 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const API_BASE = 'http://localhost:8000';
+
 export default function ResultScreen({ navigation }) {
+  const [loading, setLoading] = useState(true);
+  const [submitted, setSubmitted] = useState(false);
   const [result, setResult] = useState(null);
 
-  useEffect(() => {
-    const loadResult = async () => {
-      try {
-        const stored = await AsyncStorage.getItem('latestAiResult');
-        if (stored) {
-          setResult(JSON.parse(stored));
-        } else {
-          // Fallback if no result is found
-          setResult({
-            total_score: 0,
-            relevance: 0,
-            creativity: 0,
-            clarity: 0,
-            impact: 0
-          });
-        }
-      } catch (e) {
-        console.error("Failed to load result", e);
+  const loadResult = useCallback(async () => {
+    setLoading(true);
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) {
+        setSubmitted(false);
+        setResult(null);
+        return;
       }
-    };
-    loadResult();
+      const res = await axios.get(`${API_BASE}/my-creative-result`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.data?.submitted && res.data.scores) {
+        setSubmitted(true);
+        setResult(res.data.scores);
+        await AsyncStorage.setItem('latestAiResult', JSON.stringify(res.data.scores));
+      } else {
+        setSubmitted(false);
+        setResult(null);
+        await AsyncStorage.removeItem('latestAiResult');
+      }
+    } catch (e) {
+      console.error('Failed to load creative result', e);
+      setSubmitted(false);
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  if (!result) {
+  useFocusEffect(
+    useCallback(() => {
+      loadResult();
+    }, [loadResult])
+  );
+
+  if (loading) {
     return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+      <View style={[styles.container, styles.centered]}>
         <ActivityIndicator size="large" color="#4ADE80" />
       </View>
+    );
+  }
+
+  if (!submitted || !result) {
+    return (
+      <ScrollView style={styles.container}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Text style={styles.backTxt}>← Back to Dashboard</Text>
+        </TouchableOpacity>
+        <Text style={styles.header}>AI Evaluation Result</Text>
+        <View style={styles.emptyBox}>
+          <Text style={styles.emptyTitle}>No creative submission yet</Text>
+          <Text style={styles.emptyBody}>
+            Complete the quiz, then submit your 25-word entry. Your AI scores will appear here for your
+            account only.
+          </Text>
+        </View>
+      </ScrollView>
     );
   }
 
@@ -43,21 +87,20 @@ export default function ResultScreen({ navigation }) {
       </TouchableOpacity>
 
       <Text style={styles.header}>AI Evaluation Result</Text>
-      
+
       <View style={styles.scoreCircle}>
         <Text style={styles.scoreNum}>{result.total_score}</Text>
         <Text style={styles.scoreMax}>/ 100</Text>
       </View>
 
       <Text style={styles.rubricHead}>Rubric Breakdown</Text>
-      
+
       <View style={styles.rubricBox}>
         <RubricRow title="Relevance (25)" score={result.relevance} />
         <RubricRow title="Creativity (25)" score={result.creativity} />
         <RubricRow title="Clarity (25)" score={result.clarity} />
         <RubricRow title="Impact (25)" score={result.impact} />
       </View>
-      
     </ScrollView>
   );
 }
@@ -78,6 +121,10 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingTop: 50,
   },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   backBtn: {
     marginBottom: 20,
   },
@@ -90,6 +137,26 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#FFF',
     marginBottom: 30,
+    textAlign: 'center',
+  },
+  emptyBox: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 15,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 181, 253, 0.2)',
+  },
+  emptyTitle: {
+    color: '#FFF',
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  emptyBody: {
+    color: 'rgba(255,255,255,0.65)',
+    fontSize: 15,
+    lineHeight: 22,
     textAlign: 'center',
   },
   scoreCircle: {
@@ -140,5 +207,5 @@ const styles = StyleSheet.create({
     color: '#4ADE80',
     fontWeight: 'bold',
     fontSize: 16,
-  }
+  },
 });

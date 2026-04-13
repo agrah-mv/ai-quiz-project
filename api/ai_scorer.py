@@ -5,6 +5,8 @@ from groq import Groq
 
 RUBRIC_KEYS = ("relevance", "creativity", "clarity", "impact")
 ENTRY_PROMPT = "In exactly 25 words, tell us why you should win this prize."
+RELEVANCE_LOW_THRESHOLD = 8
+TOTAL_CAP_FOR_LOW_RELEVANCE = 35
 
 
 def _word_count_tool(response_text: str) -> Dict[str, Any]:
@@ -28,6 +30,55 @@ def _aggregate_total_tool(scores: Dict[str, int]) -> int:
     return int(sum(scores.get(k, 0) for k in RUBRIC_KEYS))
 
 
+def _off_topic_guard_tool(response_text: str, scores: Dict[str, int]) -> Dict[str, Any]:
+    """
+    Deterministic guardrail to keep unrelated responses from scoring high.
+    """
+    lowered = response_text.lower()
+    topic_signals = (
+        "win",
+        "deserve",
+        "because",
+        "prize",
+        "challenge",
+        "home",
+        "skill",
+        "entry",
+        "i ",
+        "my ",
+        "me ",
+    )
+    signal_hits = sum(1 for token in topic_signals if token in lowered)
+
+    adjusted = dict(scores)
+    penalties: List[str] = []
+
+    # Hard off-topic pattern: no justification intent signals detected.
+    if signal_hits <= 1:
+        adjusted["relevance"] = min(adjusted.get("relevance", 0), 3)
+        penalties.append("off_topic_signal_penalty")
+
+    # If relevance is low, keep overall score low regardless of style quality.
+    total = _aggregate_total_tool(adjusted)
+    if adjusted.get("relevance", 0) < RELEVANCE_LOW_THRESHOLD and total > TOTAL_CAP_FOR_LOW_RELEVANCE:
+        capped_total = TOTAL_CAP_FOR_LOW_RELEVANCE
+        spill = total - capped_total
+        # Reduce non-relevance dimensions first to preserve relevance interpretation.
+        for key in ("impact", "creativity", "clarity"):
+            if spill <= 0:
+                break
+            reduction = min(adjusted[key], spill)
+            adjusted[key] -= reduction
+            spill -= reduction
+        penalties.append("low_relevance_total_cap")
+
+    return {
+        "signal_hits": signal_hits,
+        "penalties": penalties,
+        "scores": adjusted,
+    }
+
+
 def _llm_score_agent(client: Groq, response_text: str, memory: Dict[str, Any]) -> Dict[str, Any]:
     prompt = f"""
 You are Agent A (Scoring Agent). Score a 25-word response with this rubric (0-25 each):
@@ -35,6 +86,10 @@ You are Agent A (Scoring Agent). Score a 25-word response with this rubric (0-25
 - creativity
 - clarity
 - impact
+
+Critical rule:
+- If the response is unrelated to "why the participant should win this prize",
+  assign very low relevance (0-5) and keep other categories conservative.
 
 Competition prompt: "{ENTRY_PROMPT}"
 Response: "{response_text}"
@@ -63,6 +118,7 @@ def _llm_review_agent(client: Groq, response_text: str, candidate: Dict[str, Any
     prompt = f"""
 You are Agent B (Review Agent). Review Agent A's score for fairness and consistency.
 If needed, adjust rubric scores by up to 5 points per category.
+Enforce strict topicality: unrelated responses must not end up with high totals.
 
 Competition prompt: "{ENTRY_PROMPT}"
 Response: "{response_text}"
@@ -172,6 +228,8 @@ def evaluate_creative_response(response_text: str) -> Dict[str, Any]:
         )
 
         final_scores = _normalize_scores_tool(agent_b_raw)
+        guardrail = _off_topic_guard_tool(response_text, final_scores)
+        final_scores = _normalize_scores_tool(guardrail["scores"])
         total = _aggregate_total_tool(final_scores)
         audit_events.append(
             {
@@ -180,6 +238,15 @@ def evaluate_creative_response(response_text: str) -> Dict[str, Any]:
                 "tool_name": "aggregate_total_tool",
                 "input_payload": final_scores,
                 "output_payload": {"total_score": total},
+            }
+        )
+        audit_events.append(
+            {
+                "stage": "off_topic_guardrail",
+                "agent": "orchestrator",
+                "tool_name": "off_topic_guard_tool",
+                "input_payload": {"response_text": response_text},
+                "output_payload": guardrail,
             }
         )
 

@@ -253,26 +253,33 @@ def submit_response(submission: schemas.CreativeSubmit, current_user: models.Use
         raise HTTPException(status_code=403, detail="Must pass quiz first")
     
     existing = db.query(models.Response).filter(models.Response.user_id == current_user.id).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Response already submitted")
-        
+
     words = submission.response.split()
     if len(words) != 25:
         raise HTTPException(status_code=400, detail=f"Response must be exactly 25 words. Current count: {len(words)}")
-        
+
     scores = ai_scorer.evaluate_creative_response(submission.response)
     audit_events = scores.pop("audit_events", [])
-    
-    new_response = models.Response(
-        user_id=current_user.id,
-        content=submission.response,
-        relevance=scores.get('relevance', 0),
-        creativity=scores.get('creativity', 0),
-        clarity=scores.get('clarity', 0),
-        impact=scores.get('impact', 0),
-        total_score=scores.get('total_score', 0)
-    )
-    db.add(new_response)
+
+    if existing:
+        existing.content = submission.response
+        existing.relevance = scores.get("relevance", 0)
+        existing.creativity = scores.get("creativity", 0)
+        existing.clarity = scores.get("clarity", 0)
+        existing.impact = scores.get("impact", 0)
+        existing.total_score = scores.get("total_score", 0)
+    else:
+        db.add(
+            models.Response(
+                user_id=current_user.id,
+                content=submission.response,
+                relevance=scores.get("relevance", 0),
+                creativity=scores.get("creativity", 0),
+                clarity=scores.get("clarity", 0),
+                impact=scores.get("impact", 0),
+                total_score=scores.get("total_score", 0),
+            )
+        )
     db.commit()
 
     for event in audit_events:
@@ -288,7 +295,30 @@ def submit_response(submission: schemas.CreativeSubmit, current_user: models.Use
             )
         )
     db.commit()
-    return {"message": "Response scored", "scores": scores}
+    return {
+        "message": "Response updated and rescored" if existing else "Response scored",
+        "scores": scores,
+        "resubmission": bool(existing),
+    }
+
+
+@app.get("/my-creative-result")
+def get_my_creative_result(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Scores for the logged-in user only (not shared device cache)."""
+    row = db.query(models.Response).filter(models.Response.user_id == current_user.id).first()
+    if not row:
+        return {"submitted": False}
+    return {
+        "submitted": True,
+        "scores": {
+            "relevance": row.relevance,
+            "creativity": row.creativity,
+            "clarity": row.clarity,
+            "impact": row.impact,
+            "total_score": row.total_score,
+        },
+    }
+
 
 @app.get("/leaderboard")
 def get_leaderboard(db: Session = Depends(get_db)):

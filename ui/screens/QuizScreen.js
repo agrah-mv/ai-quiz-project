@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useRoute, useIsFocused, useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -16,6 +16,8 @@ export default function QuizScreen({ navigation }) {
   const [attemptsRemaining, setAttemptsRemaining] = useState(null);
   const [maxAttempts, setMaxAttempts] = useState(10);
   const [timeoutHandled, setTimeoutHandled] = useState(false);
+  const [selectedOption, setSelectedOption] = useState(null);
+  const [isChecking, setIsChecking] = useState(false);
 
   const fetchQuiz = useCallback(async () => {
     try {
@@ -48,6 +50,8 @@ export default function QuizScreen({ navigation }) {
       setTimeLeft(30);
       setAnswers({});
       setTimeoutHandled(false);
+      setSelectedOption(null);
+      setIsChecking(false);
       setQuestions([]);
       fetchQuiz();
     }, [route.params?.restart, navigation, fetchQuiz])
@@ -83,15 +87,22 @@ export default function QuizScreen({ navigation }) {
     return () => clearInterval(intervalId);
   }, [timeLeft, questions, isFocused, navigation]);
 
-  const handleAnswer = async (optionKey) => {
+  const handleSelectOption = (optionKey) => {
+    if (isChecking) return;
+    setSelectedOption(optionKey);
+  };
+
+  const handleNextQuestion = async () => {
+    if (!selectedOption || isChecking) return;
     const q = questions[currentIndex];
     
     try {
+      setIsChecking(true);
       const token = await AsyncStorage.getItem('userToken');
       // Verify the answer immediately
       const verifyRes = await axios.post(`${API_BASE}/verify-answer`, { 
         id: q.id, 
-        answer: optionKey 
+        answer: selectedOption 
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -102,13 +113,14 @@ export default function QuizScreen({ navigation }) {
         return;
       }
 
-      const newAnswers = { ...answers, [q.id]: optionKey };
+      const newAnswers = { ...answers, [q.id]: selectedOption };
       setAnswers(newAnswers);
 
       if (currentIndex < questions.length - 1) {
         setCurrentIndex(currentIndex + 1);
         setTimeLeft(30); // reset timer
         setTimeoutHandled(false);
+        setSelectedOption(null);
       } else {
         // All correct! Submit the final quiz attempt
         const res = await axios.post(`${API_BASE}/submit-quiz`, { answers: newAnswers }, {
@@ -131,6 +143,8 @@ export default function QuizScreen({ navigation }) {
       } else {
         Alert.alert("Connection Error", "Could not verify answer. Please check your internet.");
       }
+    } finally {
+      setIsChecking(false);
     }
   };
 
@@ -153,12 +167,34 @@ export default function QuizScreen({ navigation }) {
       {Object.entries(currentQ.options).map(([key, value]) => (
         <TouchableOpacity 
           key={key} 
-          style={styles.optionBtn}
-          onPress={() => handleAnswer(key)}
+          style={[
+            styles.optionBtn,
+            selectedOption === key && styles.optionBtnSelected
+          ]}
+          onPress={() => handleSelectOption(key)}
         >
           <Text style={styles.optionText}>{key}. {value}</Text>
         </TouchableOpacity>
       ))}
+
+      {selectedOption ? (
+        <TouchableOpacity
+          style={[styles.nextBtn, isChecking && styles.nextBtnDisabled]}
+          onPress={handleNextQuestion}
+          disabled={isChecking}
+        >
+          {isChecking ? (
+            <View style={styles.nextBtnInner}>
+              <ActivityIndicator color="#FFF" size="small" style={styles.nextBtnSpinner} />
+              <Text style={styles.nextBtnText}>CHECKING...</Text>
+            </View>
+          ) : (
+            <Text style={styles.nextBtnText}>
+              {currentIndex < questions.length - 1 ? 'NEXT QUESTION →' : 'SUBMIT QUIZ →'}
+            </Text>
+          )}
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -203,9 +239,37 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 15,
   },
+  optionBtnSelected: {
+    borderColor: '#F59E0B',
+    backgroundColor: 'rgba(245, 158, 11, 0.16)',
+  },
   optionText: {
     color: '#FFF',
     fontSize: 16,
+  },
+  nextBtn: {
+    backgroundColor: '#F59E0B',
+    paddingVertical: 14,
+    borderRadius: 50,
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  nextBtnDisabled: {
+    opacity: 0.75,
+  },
+  nextBtnText: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  nextBtnInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nextBtnSpinner: {
+    marginRight: 8,
   },
   text: {
     color: '#FFF',

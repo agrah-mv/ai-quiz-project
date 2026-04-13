@@ -45,6 +45,7 @@ export default function EmailVerifyScreen({ route, navigation }) {
         email,
         code,
       });
+      await AsyncStorage.multiRemove(['latestAiResult']);
       await AsyncStorage.setItem('userToken', res.data.access_token);
       navigation.navigate('Quiz');
     } catch (err) {

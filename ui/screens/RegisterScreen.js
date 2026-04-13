@@ -20,29 +20,63 @@ export default function RegisterScreen({ navigation }) {
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const validateInputs = () => {
+    const emailTrimmed = email.trim();
+    const passwordTrimmed = password.trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailTrimmed || !passwordTrimmed) {
+      return 'Email and password are required.';
+    }
+    if (!emailRegex.test(emailTrimmed)) {
+      return 'Please enter a valid email address.';
+    }
+    if (!isLogin && passwordTrimmed.length < 6) {
+      return 'Password must be at least 6 characters.';
+    }
+    return '';
+  };
+
+  const getApiErrorMessage = (error) => {
+    const detail = error?.response?.data?.detail;
+    if (!detail) return 'An error occurred.';
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      const firstMsg = detail[0]?.msg;
+      return typeof firstMsg === 'string' ? firstMsg : 'Invalid input. Please check your details.';
+    }
+    return 'Invalid input. Please check your details.';
+  };
+
   const handleSubmit = async () => {
     if (loading) return;
     setErrorMsg('');
+    const validationError = validateInputs();
+    if (validationError) {
+      setErrorMsg(validationError);
+      return;
+    }
     setLoading(true);
     try {
       if (isLogin) {
-        const res = await axios.post(`${API_BASE}/login`, { email, password });
+        const res = await axios.post(`${API_BASE}/login`, { email: email.trim(), password: password.trim() });
         if (res.status === 200) {
+          await AsyncStorage.removeItem('latestAiResult');
           await AsyncStorage.setItem('userToken', res.data.access_token);
           // Login response decides if user should reattempt quiz or go to dashboard.
           const nextScreen = res.data?.next_screen === 'Quiz' ? 'Quiz' : 'Dashboard';
           navigation.navigate(nextScreen);
         }
       } else {
-        const res = await axios.post(`${API_BASE}/signup`, { email, password });
+        const res = await axios.post(`${API_BASE}/signup`, { email: email.trim(), password: password.trim() });
         if (res.status === 200) {
           // OTP flow: do not auto-login; send user to email verification screen
-          navigation.navigate('EmailVerify', { email });
+          navigation.navigate('EmailVerify', { email: email.trim() });
         }
       }
     } catch (error) {
       console.log('Error:', error);
-      setErrorMsg(error.response?.data?.detail || 'An error occurred.');
+      setErrorMsg(getApiErrorMessage(error));
     } finally {
       setLoading(false);
     }

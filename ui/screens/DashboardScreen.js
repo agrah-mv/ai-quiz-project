@@ -41,7 +41,7 @@ export default function DashboardScreen({ navigation }) {
   );
 
   const handleLogout = async () => {
-    await AsyncStorage.removeItem('userToken');
+    await AsyncStorage.multiRemove(['userToken', 'latestAiResult']);
     navigation.reset({
       index: 0,
       routes: [{ name: 'Landing' }],
@@ -62,7 +62,7 @@ export default function DashboardScreen({ navigation }) {
         {attemptsRemaining > 0 ? (
           <TouchableOpacity
             style={styles.addEntryBtn}
-            onPress={() => navigation.navigate('Quiz')}
+            onPress={() => navigation.navigate('Quiz', { restart: true })}
           >
             <Text style={styles.addEntryBtnText}>ADD ANOTHER ENTRY →</Text>
           </TouchableOpacity>
